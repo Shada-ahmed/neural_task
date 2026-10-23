@@ -9,7 +9,6 @@ class Perceptron:
         self.epochs = epochs
         self.use_bias = use_bias
         self.rng = np.random.default_rng(random_state)
-        # Exactly two weights because we use two features
         self.weights = np.random.uniform(-0.01, 0.01, 2)
         self.bias = np.random.uniform(-0.01, 0.01) if use_bias else 0
 

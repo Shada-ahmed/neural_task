@@ -1,4 +1,3 @@
-
 import csv
 from pathlib import Path
 
@@ -22,12 +21,16 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QAbstractItemView,
     QScrollArea,
+    QRadioButton,
+    QButtonGroup,
+    QDoubleSpinBox,
 )
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
 from algorithms.perceptron import Perceptron
+from algorithms.adaline import Adaline
 from data_processing.pre_processing import (
     load_data,
     preprocess_data,
@@ -42,12 +45,42 @@ from evaluation.metrics import (
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_PATH = PROJECT_ROOT / "penguins.csv"
 
+ALGORITHM_PERCEPTRON = "Perceptron (SLP)"
+ALGORITHM_ADALINE = "ADALINE"
+
+# Same columns for every experiment so both algorithms can share one
+# history list and one CSV file. ADALINE-only fields are "" for Perceptron.
+EXPERIMENT_FIELDS = [
+    "experiment",
+    "algorithm",
+    "feature_1",
+    "feature_2",
+    "class_1",
+    "class_2",
+    "learning_rate",
+    "requested_epochs",
+    "epochs_used",
+    "use_bias",
+    "mse_threshold",
+    "training_accuracy_percent",
+    "testing_accuracy_percent",
+    "accuracy_gap_percentage_points",
+    "actual_-1_predicted_-1",
+    "actual_-1_predicted_+1",
+    "actual_+1_predicted_-1",
+    "actual_+1_predicted_+1",
+    "weight_1",
+    "weight_2",
+    "bias_value",
+    "final_mse",
+]
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("Neural Networks Lab 3 | Perceptron")
+        self.setWindowTitle("Neural Networks Task 1 | Perceptron and ADALINE")
         self.resize(1250, 950)
         self.setMinimumSize(950, 700)
 
@@ -57,6 +90,7 @@ class MainWindow(QMainWindow):
         self.create_widgets()
         self.populate_dropdowns()
         self.apply_style()
+        self.on_algorithm_changed()
 
     # =========================================================
     # GUI SETUP
@@ -77,16 +111,41 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(16)
 
         # Header
-        title = QLabel("Neural Networks Lab 3")
+        title = QLabel("Neural Networks Task 1")
         title.setObjectName("pageTitle")
 
         subtitle = QLabel(
-            "Penguin Classification  |  Perceptron Training and Evaluation"
+            "Penguin Classification  |  Perceptron and ADALINE Training and Evaluation"
         )
         subtitle.setObjectName("subtitle")
 
         main_layout.addWidget(title)
         main_layout.addWidget(subtitle)
+
+        # -----------------------------------------------------
+        # Algorithm selection
+        # -----------------------------------------------------
+
+        algorithm_box = QGroupBox("00  |  Algorithm")
+        algorithm_layout = QHBoxLayout(algorithm_box)
+        algorithm_layout.setContentsMargins(18, 24, 18, 14)
+        algorithm_layout.setSpacing(24)
+
+        self.perceptron_radio = QRadioButton("Single-Layer Perceptron (SLP)")
+        self.adaline_radio = QRadioButton("ADALINE")
+        self.perceptron_radio.setChecked(True)
+
+        # QButtonGroup makes the two radio buttons mutually exclusive.
+        self.algorithm_group = QButtonGroup(self)
+        self.algorithm_group.addButton(self.perceptron_radio)
+        self.algorithm_group.addButton(self.adaline_radio)
+        self.perceptron_radio.toggled.connect(self.on_algorithm_changed)
+
+        algorithm_layout.addWidget(self.perceptron_radio)
+        algorithm_layout.addWidget(self.adaline_radio)
+        algorithm_layout.addStretch(1)
+
+        main_layout.addWidget(algorithm_box)
 
         # -----------------------------------------------------
         # Model configuration
@@ -106,6 +165,14 @@ class MainWindow(QMainWindow):
         self.epochs_combo = QComboBox()
         self.bias_combo = QComboBox()
 
+        # ADALINE only. Minimum 0 blocks negative values.
+        self.mse_threshold_input = QDoubleSpinBox()
+        self.mse_threshold_input.setDecimals(6)
+        self.mse_threshold_input.setRange(0.0, 1000.0)
+        self.mse_threshold_input.setSingleStep(0.005)
+        self.mse_threshold_input.setValue(0.01)
+        self.mse_threshold_input.setKeyboardTracking(False)
+
         settings = [
             ("Feature 1", self.feature1_combo, 0, 0),
             ("Feature 2", self.feature2_combo, 0, 2),
@@ -114,11 +181,17 @@ class MainWindow(QMainWindow):
             ("Learning rate", self.learning_rate_combo, 2, 0),
             ("Maximum epochs", self.epochs_combo, 2, 2),
             ("Use bias", self.bias_combo, 3, 0),
+            ("MSE threshold", self.mse_threshold_input, 3, 2),
         ]
+
+        self.mse_threshold_label = None
 
         for label_text, combo, row, column in settings:
             label = QLabel(label_text)
             label.setMinimumWidth(95)
+
+            if combo is self.mse_threshold_input:
+                self.mse_threshold_label = label
 
             settings_layout.addWidget(label, row, column)
             settings_layout.addWidget(combo, row, column + 1)
@@ -267,10 +340,11 @@ class MainWindow(QMainWindow):
         history_layout = QVBoxLayout(history_box)
         history_layout.setContentsMargins(12, 24, 12, 12)
 
-        self.history_table = QTableWidget(0, 8)
+        self.history_table = QTableWidget(0, 9)
 
         self.history_table.setHorizontalHeaderLabels([
             "Experiment",
+            "Algorithm",
             "Features",
             "Classes",
             "Learning Rate",
@@ -365,6 +439,31 @@ class MainWindow(QMainWindow):
                 padding: 4px 8px;
                 min-height: 30px;
                 max-height: 34px;
+            }
+
+            QDoubleSpinBox {
+                background-color: #FFFFFF;
+                color: #1E293B;
+                border: 1px solid #CBD5E1;
+                border-radius: 6px;
+                padding: 4px 8px;
+                min-height: 30px;
+                max-height: 34px;
+            }
+
+            QDoubleSpinBox:focus {
+                border: 1px solid #2563EB;
+            }
+
+            QDoubleSpinBox:disabled, QLabel:disabled {
+                color: #94A3B8;
+                background-color: #F1F5F9;
+            }
+
+            QRadioButton {
+                font-weight: 600;
+                spacing: 8px;
+                background: transparent;
             }
 
             QComboBox:hover {
@@ -528,6 +627,22 @@ class MainWindow(QMainWindow):
             self.class2_combo.setCurrentIndex(1)
 
     # =========================================================
+    # ALGORITHM SELECTION
+    # =========================================================
+
+    def selected_algorithm(self):
+        if self.adaline_radio.isChecked():
+            return ALGORITHM_ADALINE
+        return ALGORITHM_PERCEPTRON
+
+    def on_algorithm_changed(self, *_):
+        # The MSE threshold only matters for ADALINE.
+        is_adaline = self.selected_algorithm() == ALGORITHM_ADALINE
+        self.mse_threshold_input.setEnabled(is_adaline)
+        if self.mse_threshold_label is not None:
+            self.mse_threshold_label.setEnabled(is_adaline)
+
+    # =========================================================
     # TRAINING AND EVALUATION
     # =========================================================
 
@@ -571,11 +686,32 @@ class MainWindow(QMainWindow):
                 random_state=42,
             )
 
-            model = Perceptron(
-                learning_rate=learning_rate,
-                epochs=epochs,
-                use_bias=use_bias,
-            )
+            algorithm = self.selected_algorithm()
+            mse_threshold = None
+
+            if algorithm == ALGORITHM_ADALINE:
+                mse_threshold = float(self.mse_threshold_input.value())
+
+                if mse_threshold < 0:
+                    QMessageBox.warning(
+                        self,
+                        "Invalid MSE Threshold",
+                        "The MSE threshold must be zero or larger.",
+                    )
+                    return
+
+                model = Adaline(
+                    learning_rate=learning_rate,
+                    epochs=epochs,
+                    use_bias=use_bias,
+                    mse_threshold=mse_threshold,
+                )
+            else:
+                model = Perceptron(
+                    learning_rate=learning_rate,
+                    epochs=epochs,
+                    use_bias=use_bias,
+                )
 
             model.fit(X_train, y_train)
 
@@ -593,11 +729,16 @@ class MainWindow(QMainWindow):
                 y_test, test_predictions
             )
 
-            errors_per_epoch = list(
-                getattr(model, "errors_per_epoch", [])
-            )
+            # Training history depends on the algorithm:
+            # Perceptron -> misclassified samples, ADALINE -> MSE.
+            if algorithm == ALGORITHM_ADALINE:
+                history = list(model.msePerEpoch)
+            else:
+                history = list(getattr(model, "errors_per_epoch", []))
 
             self.show_results(
+                algorithm=algorithm,
+                mse_threshold=mse_threshold,
                 model=model,
                 X_train=X_train,
                 X_test=X_test,
@@ -613,7 +754,7 @@ class MainWindow(QMainWindow):
                 train_accuracy=train_accuracy,
                 test_accuracy=test_accuracy,
                 matrix=matrix,
-                errors_per_epoch=errors_per_epoch,
+                history=history,
             )
 
         except Exception as error:
@@ -629,6 +770,8 @@ class MainWindow(QMainWindow):
 
     def show_results(
         self,
+        algorithm,
+        mse_threshold,
         model,
         X_train,
         X_test,
@@ -644,7 +787,7 @@ class MainWindow(QMainWindow):
         train_accuracy,
         test_accuracy,
         matrix,
-        errors_per_epoch,
+        history,
     ):
         accuracy_gap = train_accuracy - test_accuracy
 
@@ -667,7 +810,7 @@ class MainWindow(QMainWindow):
             f"Accuracy Gap\n{accuracy_gap:+.2f}%"
         )
         self.epochs_used_label.setText(
-            f"Epochs Used\n{len(errors_per_epoch)}"
+            f"Epochs Used\n{len(history)}"
         )
         self.assessment_label.setText(
             f"Assessment: {assessment}"
@@ -684,6 +827,8 @@ class MainWindow(QMainWindow):
                 self.confusion_table.setItem(row, column, item)
 
         self.plot_results(
+            algorithm=algorithm,
+            mse_threshold=mse_threshold,
             model=model,
             X_train=X_train,
             X_test=X_test,
@@ -693,18 +838,23 @@ class MainWindow(QMainWindow):
             feature2=feature2,
             class1=class1,
             class2=class2,
-            errors_per_epoch=errors_per_epoch,
+            history=history,
         )
+
+        is_adaline = algorithm == ALGORITHM_ADALINE
 
         experiment = {
             "experiment": len(self.experiment_history) + 1,
+            "algorithm": algorithm,
             "feature_1": feature1,
             "feature_2": feature2,
             "class_1": class1,
             "class_2": class2,
             "learning_rate": learning_rate,
             "requested_epochs": requested_epochs,
+            "epochs_used": len(history),
             "use_bias": use_bias,
+            "mse_threshold": mse_threshold if is_adaline else "",
             "training_accuracy_percent": round(
                 float(train_accuracy), 2
             ),
@@ -714,14 +864,14 @@ class MainWindow(QMainWindow):
             "accuracy_gap_percentage_points": round(
                 float(accuracy_gap), 2
             ),
-            "epochs_used": len(errors_per_epoch),
             "actual_-1_predicted_-1": int(matrix[0, 0]),
             "actual_-1_predicted_+1": int(matrix[0, 1]),
             "actual_+1_predicted_-1": int(matrix[1, 0]),
             "actual_+1_predicted_+1": int(matrix[1, 1]),
-            "bias_value": float(model.bias),
             "weight_1": float(model.weights[0]),
             "weight_2": float(model.weights[1]),
+            "bias_value": float(model.bias),
+            "final_mse": float(history[-1]) if is_adaline and history else "",
         }
 
         self.experiment_history.append(experiment)
@@ -734,6 +884,8 @@ class MainWindow(QMainWindow):
     
     def plot_results(
         self,
+        algorithm,
+        mse_threshold,
         model,
         X_train,
         X_test,
@@ -743,7 +895,7 @@ class MainWindow(QMainWindow):
         feature2,
         class1,
         class2,
-        errors_per_epoch,
+        history,
     ):
         self.figure.clear()
 
@@ -830,36 +982,58 @@ class MainWindow(QMainWindow):
         boundary_ax.grid(True, alpha=0.25)
         boundary_ax.legend(fontsize=8, loc="best")
 
-        # Training errors per epoch.
-        if errors_per_epoch:
+        # Training history: errors (Perceptron) or MSE (ADALINE).
+        is_adaline = algorithm == ALGORITHM_ADALINE
+
+        if is_adaline:
+            history_title = "MSE per Epoch"
+            history_ylabel = "Mean squared error (MSE)"
+        else:
+            history_title = "Training Errors per Epoch"
+            history_ylabel = "Misclassified training samples"
+
+        if history:
             error_ax.plot(
-                range(1, len(errors_per_epoch) + 1),
-                errors_per_epoch,
+                range(1, len(history) + 1),
+                history,
                 color="#7C3AED",
                 marker="o",
                 markersize=5,
                 linewidth=2,
+                label="MSE" if is_adaline else "Errors",
             )
 
             error_ax.set_xlabel("Epoch")
-            error_ax.set_ylabel("Misclassified training samples")
-            error_ax.set_title("Training Errors per Epoch")
-            error_ax.set_ylim(
-                bottom=0,
-                top=max(errors_per_epoch) + 1,
-            )
+            error_ax.set_ylabel(history_ylabel)
+            error_ax.set_title(history_title)
             error_ax.grid(True, alpha=0.25)
+
+            if is_adaline:
+                error_ax.axhline(
+                    y=mse_threshold,
+                    color="#DC2626",
+                    linestyle="--",
+                    linewidth=1.8,
+                    label=f"MSE threshold = {mse_threshold:g}",
+                )
+                error_ax.set_ylim(bottom=0)
+                error_ax.legend(fontsize=8, loc="best")
+            else:
+                error_ax.set_ylim(
+                    bottom=0,
+                    top=max(history) + 1,
+                )
 
         else:
             error_ax.text(
                 0.5,
                 0.5,
-                "No training-error history available",
+                "No training history available",
                 transform=error_ax.transAxes,
                 ha="center",
                 va="center",
             )
-            error_ax.set_title("Training Errors per Epoch")
+            error_ax.set_title(history_title)
 
         self.canvas.draw()
 
@@ -874,6 +1048,7 @@ class MainWindow(QMainWindow):
 
         values = [
             experiment["experiment"],
+            experiment["algorithm"],
             f'{experiment["feature_1"]} + {experiment["feature_2"]}',
             f'{experiment["class_1"]} vs {experiment["class_2"]}',
             experiment["learning_rate"],
@@ -901,14 +1076,14 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "No Experiments",
-                "Train the Perceptron at least once before exporting.",
+                "Train a model at least once before exporting.",
             )
             return
 
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Export Experiment Results",
-            str(PROJECT_ROOT / "perceptron_experiments.csv"),
+            str(PROJECT_ROOT / "experiments.csv"),
             "CSV Files (*.csv)",
         )
 
@@ -919,7 +1094,7 @@ class MainWindow(QMainWindow):
             file_path += ".csv"
 
         try:
-            fieldnames = list(self.experiment_history[0].keys())
+            fieldnames = EXPERIMENT_FIELDS
 
             with open(
                 file_path,
