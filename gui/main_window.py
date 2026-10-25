@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QRadioButton,
     QButtonGroup,
     QDoubleSpinBox,
+    QLineEdit,
 )
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -85,7 +86,21 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(950, 700)
 
         self.data = preprocess_data(load_data(DATA_PATH))
+        self.feature_ranges = {}
+        for column in self.data.select_dtypes(include=np.number).columns:
+            if column != "Species":
+                self.feature_ranges[column] = (
+                    float(self.data[column].min()),
+                    float(self.data[column].max()),
+                )
         self.experiment_history = []
+        self.trained_model = None
+        self.trained_class1 = None
+        self.trained_class2 = None
+        self.training_mean = None
+        self.training_std = None
+        self.trained_feature1 = None
+        self.trained_feature2 = None
 
         self.create_widgets()
         self.populate_dropdowns()
@@ -199,6 +214,23 @@ class MainWindow(QMainWindow):
         settings_layout.setColumnStretch(1, 1)
         settings_layout.setColumnStretch(3, 1)
 
+        # Random seed option
+        seed_label = QLabel("Use random seed?")
+        self.seed_yes_radio = QRadioButton("Yes")
+        self.seed_no_radio = QRadioButton("No")
+        self.seed_yes_radio.setChecked(True)
+
+        self.seed_group = QButtonGroup(self)
+        self.seed_group.addButton(self.seed_yes_radio)
+        self.seed_group.addButton(self.seed_no_radio)
+
+        seed_layout = QHBoxLayout()
+        seed_layout.addWidget(seed_label)
+        seed_layout.addWidget(self.seed_yes_radio)
+        seed_layout.addWidget(self.seed_no_radio)
+        seed_layout.addStretch(1)
+        settings_layout.addLayout(seed_layout, 4, 0, 1, 4)
+
         main_layout.addWidget(settings_box)
 
         # -----------------------------------------------------
@@ -223,6 +255,39 @@ class MainWindow(QMainWindow):
         buttons_layout.addWidget(self.export_button, 1)
 
         main_layout.addLayout(buttons_layout)
+
+        # -----------------------------------------------------
+        # Classify a single sample
+        # -----------------------------------------------------
+
+        sample_box = QGroupBox("Classify a Single Sample")
+        sample_layout = QGridLayout(sample_box)
+        sample_layout.setContentsMargins(18, 24, 18, 18)
+        sample_layout.setHorizontalSpacing(16)
+        sample_layout.setVerticalSpacing(10)
+
+        self.sample_feature1_label = QLabel("Feature 1:")
+        self.sample_feature1_input = QLineEdit()
+        self.sample_feature1_input.setPlaceholderText("Enter Feature 1 value")
+
+        self.sample_feature2_label = QLabel("Feature 2:")
+        self.sample_feature2_input = QLineEdit()
+        self.sample_feature2_input.setPlaceholderText("Enter Feature 2 value")
+
+        self.classify_sample_button = QPushButton("Classify Sample")
+        self.classify_sample_button.clicked.connect(self.classify_single_sample)
+
+        self.sample_prediction_label = QLabel("Prediction: Train a model first.")
+        self.sample_prediction_label.setWordWrap(True)
+
+        sample_layout.addWidget(self.sample_feature1_label, 0, 0)
+        sample_layout.addWidget(self.sample_feature1_input, 0, 1)
+        sample_layout.addWidget(self.sample_feature2_label, 1, 0)
+        sample_layout.addWidget(self.sample_feature2_input, 1, 1)
+        sample_layout.addWidget(self.classify_sample_button, 2, 0, 1, 2)
+        sample_layout.addWidget(self.sample_prediction_label, 3, 0, 1, 2)
+
+        main_layout.addWidget(sample_box)
 
         # -----------------------------------------------------
         # Performance metrics
@@ -277,11 +342,12 @@ class MainWindow(QMainWindow):
 
         self.confusion_table = QTableWidget(2, 2)
 
+        # The class names are updated after each experiment.
         self.confusion_table.setHorizontalHeaderLabels(
-            ["Predicted -1", "Predicted +1"]
+            ["Predicted: Class 1", "Predicted: Class 2"]
         )
         self.confusion_table.setVerticalHeaderLabels(
-            ["Actual -1", "Actual +1"]
+            ["Actual: Class 1", "Actual: Class 2"]
         )
 
         self.confusion_table.horizontalHeader().setSectionResizeMode(
@@ -441,6 +507,20 @@ class MainWindow(QMainWindow):
                 max-height: 34px;
             }
 
+            QLineEdit {
+                background-color: #FFFFFF;
+                color: #1E293B;
+                border: 1px solid #CBD5E1;
+                border-radius: 6px;
+                padding: 4px 8px;
+                min-height: 30px;
+                max-height: 34px;
+            }
+
+            QLineEdit:focus {
+                border: 1px solid #2563EB;
+            }
+
             QDoubleSpinBox {
                 background-color: #FFFFFF;
                 color: #1E293B;
@@ -464,6 +544,14 @@ class MainWindow(QMainWindow):
                 font-weight: 600;
                 spacing: 8px;
                 background: transparent;
+                padding: 5px 8px;
+                border-radius: 5px;
+            }
+
+            QRadioButton:checked {
+                color: #1D4ED8;
+                background-color: #DBEAFE;
+                border: 1px solid #93C5FD;
             }
 
             QComboBox:hover {
@@ -675,7 +763,7 @@ class MainWindow(QMainWindow):
             epochs = int(self.epochs_combo.currentText())
             use_bias = self.bias_combo.currentText() == "Yes"
 
-            X_train, X_test, y_train, y_test = prepare_data(
+            X_train, X_test, y_train, y_test, self.training_mean, self.training_std = prepare_data(
                 data=self.data,
                 feature1=feature1,
                 feature2=feature2,
@@ -683,7 +771,8 @@ class MainWindow(QMainWindow):
                 class2=class2,
                 train_samples=30,
                 test_samples=20,
-                random_state=42,
+                random_state=42 if self.seed_yes_radio.isChecked() else None,
+                return_scaler=True,
             )
 
             algorithm = self.selected_algorithm()
@@ -704,6 +793,7 @@ class MainWindow(QMainWindow):
                     learning_rate=learning_rate,
                     epochs=epochs,
                     use_bias=use_bias,
+                    random_state=42 if self.seed_yes_radio.isChecked() else None,
                     mse_threshold=mse_threshold,
                 )
             else:
@@ -711,9 +801,19 @@ class MainWindow(QMainWindow):
                     learning_rate=learning_rate,
                     epochs=epochs,
                     use_bias=use_bias,
+                    random_state=42 if self.seed_yes_radio.isChecked() else None,
                 )
 
             model.fit(X_train, y_train)
+            print("Use bias:", use_bias)
+            print("Model bias:", model.bias)
+            print("Weights:", model.weights)
+
+            self.trained_model = model
+            self.trained_class1 = class1
+            self.trained_class2 = class2
+            self.trained_feature1 = feature1
+            self.trained_feature2 = feature2
 
             train_predictions = model.predict(X_train)
             test_predictions = model.predict(X_test)
@@ -763,6 +863,76 @@ class MainWindow(QMainWindow):
                 "Training Error",
                 str(error),
             )
+
+    def classify_single_sample(self):
+        if self.trained_model is None:
+            QMessageBox.information(
+                self,
+                "Model Not Trained",
+                "Please train and evaluate a model before classifying a sample."
+            )
+            return
+
+        value1_text = self.sample_feature1_input.text().strip()
+        value2_text = self.sample_feature2_input.text().strip()
+
+        if not value1_text or not value2_text:
+            QMessageBox.warning(
+                self,
+                "Missing Input",
+                "Please enter values for both features."
+            )
+            return
+
+        try:
+            value1 = float(value1_text)
+            value2 = float(value2_text)
+        except ValueError:
+            QMessageBox.warning(
+                self,
+                "Invalid Input",
+                "Please enter valid numeric values for both features."
+            )
+            return
+
+        if not np.isfinite(value1) or not np.isfinite(value2):
+            QMessageBox.warning(
+                self,
+                "Invalid Input",
+                "Feature values must be finite numbers."
+            )
+            return
+
+        # Check that the values fall within the observed dataset range.
+        feature_ranges = getattr(self, "feature_ranges", {})
+        for feature, value in [
+            (self.trained_feature1, value1),
+            (self.trained_feature2, value2),
+        ]:
+            if feature in feature_ranges:
+                minimum, maximum = feature_ranges[feature]
+                if value < minimum or value > maximum:
+                    QMessageBox.warning(
+                        self,
+                        "Value Out of Range",
+                        f"{feature} must be between {minimum:g} and {maximum:g}."
+                    )
+                    return
+
+        sample = np.array([[value1, value2]], dtype=float)
+        sample = (sample - self.training_mean) / self.training_std
+        prediction = int(self.trained_model.predict(sample)[0])
+
+        if prediction == -1:
+            predicted_class = self.trained_class1
+        else:
+            predicted_class = self.trained_class2
+
+        self.sample_prediction_label.setText(
+            f"Prediction: {predicted_class} "
+            f"({self.trained_feature1} = {value1:g}, "
+            f"{self.trained_feature2} = {value2:g})"
+        )
 
     # =========================================================
     # RESULTS
@@ -814,6 +984,14 @@ class MainWindow(QMainWindow):
         )
         self.assessment_label.setText(
             f"Assessment: {assessment}"
+        )
+
+        # Show the selected class names instead of -1 and +1.
+        self.confusion_table.setHorizontalHeaderLabels(
+            [f"Predicted: {class1}", f"Predicted: {class2}"]
+        )
+        self.confusion_table.setVerticalHeaderLabels(
+            [f"Actual: {class1}", f"Actual: {class2}"]
         )
 
         for row in range(2):
